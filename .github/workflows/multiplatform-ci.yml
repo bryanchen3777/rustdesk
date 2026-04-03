@@ -14,19 +14,14 @@ on:
       - "README.md"
 
 env:
-  # Rust versions - matching flutter-build.yml
-  SCITER_RUST_VERSION: "1.75" # sciter ABI compatibility
   RUST_VERSION: "1.75"
-  MAC_RUST_VERSION: "1.81" # required for macos due to cidre crate
+  MAC_RUST_VERSION: "1.81"
   CARGO_NDK_VERSION: "3.1.2"
-  LLVM_VERSION: "15.0.6"
-  VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
-  VCPKG_COMMIT_ID: "120deac3062162151622ca4860575a33844ba10b"
   NDK_VERSION: "r28c"
 
 jobs:
   # ============================================
-  # Linux Build
+  # Linux Build (full test)
   # ============================================
   build-linux:
     name: Linux (x86_64)
@@ -47,91 +42,13 @@ jobs:
           prefix-key: rustdesk-ci-linux
 
       - name: Build
-        run: cargo build --release --features hwcodec
+        run: cargo build --release
 
       - name: Run tests
-        run: cargo test --workspace --no-fail-fast -- --skip test_get_cursor_pos --skip test_get_key_state
+        run: cargo test --workspace --no-fail-fast
 
   # ============================================
-  # Windows Build (MSVC)
-  # ============================================
-  build-windows-msvc:
-    name: Windows (x86_64-msvc)
-    runs-on: windows-2022
-    steps:
-      - name: Export GitHub Actions cache environment variables
-        uses: actions/github-script@v6
-        with:
-          script: |
-            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
-            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
-
-      - name: Checkout source code
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - name: Install LLVM and Clang
-        uses: KyleMayes/install-llvm-action@v1
-        with:
-          version: ${{ env.LLVM_VERSION }}
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@v1
-        with:
-          toolchain: ${{ env.SCITER_RUST_VERSION }}
-          targets: x86_64-pc-windows-msvc
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          prefix-key: rustdesk-ci-windows
-
-      - name: Setup vcpkg with Github Actions binary cache
-        uses: lukka/run-vcpkg@v11
-        with:
-          vcpkgDirectory: C:\vcpkg
-          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
-          doNotCache: false
-
-      - name: Install vcpkg dependencies
-        env:
-          VCPKG_DEFAULT_HOST_TRIPLET: x64-windows-static
-        run: |
-          & "$VCPKG_ROOT/vcpkg" install --triplet x64-windows-static --x-install-root="$VCPKG_ROOT/installed"
-
-      - name: Build
-        run: |
-          $env:RUSTFLAGS = "-C target-feature=+crt-static"
-          cargo build --release --target x86_64-pc-windows-msvc --features hwcodec
-
-  # ============================================
-  # Windows Build (GNU/MinGW)
-  # ============================================
-  build-windows-gnu:
-    name: Windows (x86_64-gnu)
-    runs-on: windows-2022
-    steps:
-      - name: Checkout source code
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@v1
-        with:
-          toolchain: stable
-          targets: x86_64-pc-windows-gnu
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          prefix-key: rustdesk-ci-windows-gnu
-
-      - name: Build
-        run: |
-          cargo build --release --target x86_64-pc-windows-gnu --features hwcodec
-
-  # ============================================
-  # macOS Build
+  # macOS Build (just library)
   # ============================================
   build-macos:
     name: macOS (x86_64 & ARM64)
@@ -160,13 +77,19 @@ jobs:
         with:
           prefix-key: rustdesk-ci-macos-${{ matrix.arch }}
 
-      - name: Build
+      - name: Build librustdesk
         run: |
           rustup target add ${{ matrix.target }}
-          cargo build --release --target ${{ matrix.target }} --features hwcodec
+          cargo build --release --target ${{ matrix.target }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@master
+        with:
+          name: librustdesk-macos-${{ matrix.arch }}
+          path: target/${{ matrix.target }}/release/liblibrustdesk.a
 
   # ============================================
-  # Android Build
+  # Android Build (just library)
   # ============================================
   build-android:
     name: Android (ARM64, ARMv7, x86_64)
@@ -218,19 +141,6 @@ jobs:
         with:
           prefix-key: rustdesk-ci-android-${{ matrix.arch }}
 
-      - name: Install vcpkg dependencies
-        run: |
-          if ! ./flutter/build_android_deps.sh "${{ matrix.android_target }}"; then
-            find "$VCPKG_ROOT/" -name "*.log" | while read -r _1; do
-              echo "$_1:"
-              echo "======"
-              cat "$_1"
-              echo "======"
-              echo ""
-            done
-            exit 1
-          fi
-
       - name: Build librustdesk
         env:
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
@@ -238,19 +148,16 @@ jobs:
         run: |
           rustup target add ${{ matrix.target }}
           cargo install cargo-ndk --version ${{ env.CARGO_NDK_VERSION }} --locked
-          cargo ndk ${{ matrix.target }} build --release --features hwcodec
-
-          mkdir -p ./flutter/android/app/src/main/jniLibs/${{ matrix.android_target }}
-          cp ./target/${{ matrix.target }}/release/liblibrustdesk.so ./flutter/android/app/src/main/jniLibs/${{ matrix.android_target }}/
+          cargo ndk ${{ matrix.target }} build --release
 
       - name: Upload artifact
         uses: actions/upload-artifact@master
         with:
           name: librustdesk-android-${{ matrix.arch }}
-          path: ./target/${{ matrix.target }}/release/liblibrustdesk.so
+          path: target/${{ matrix.target }}/release/liblibrustdesk.so
 
   # ============================================
-  # iOS Build (Library only)
+  # iOS Build (just library)
   # ============================================
   build-ios:
     name: iOS (ARM64)
@@ -274,7 +181,7 @@ jobs:
       - name: Build librustdesk
         run: |
           rustup target add aarch64-apple-ios
-          cargo build --features flutter,hwcodec --release --target aarch64-apple-ios --lib
+          cargo build --release --target aarch64-apple-ios
 
       - name: Upload artifact
         uses: actions/upload-artifact@master
