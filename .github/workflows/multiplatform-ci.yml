@@ -1,0 +1,283 @@
+name: Multiplatform CI
+
+# Run on push to master and on PRs
+on:
+  push:
+    branches:
+      - master
+    paths-ignore:
+      - "docs/**"
+      - "README.md"
+  pull_request:
+    paths-ignore:
+      - "docs/**"
+      - "README.md"
+
+env:
+  # Rust versions - matching flutter-build.yml
+  SCITER_RUST_VERSION: "1.75" # sciter ABI compatibility
+  RUST_VERSION: "1.75"
+  MAC_RUST_VERSION: "1.81" # required for macos due to cidre crate
+  CARGO_NDK_VERSION: "3.1.2"
+  LLVM_VERSION: "15.0.6"
+  VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+  VCPKG_COMMIT_ID: "120deac3062162151622ca4860575a33844ba10b"
+  NDK_VERSION: "r28c"
+
+jobs:
+  # ============================================
+  # Linux Build
+  # ============================================
+  build-linux:
+    name: Linux (x86_64)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: rustdesk-ci-linux
+
+      - name: Build
+        run: cargo build --release --features hwcodec
+
+      - name: Run tests
+        run: cargo test --workspace --no-fail-fast -- --skip test_get_cursor_pos --skip test_get_key_state
+
+  # ============================================
+  # Windows Build (MSVC)
+  # ============================================
+  build-windows-msvc:
+    name: Windows (x86_64-msvc)
+    runs-on: windows-2022
+    steps:
+      - name: Export GitHub Actions cache environment variables
+        uses: actions/github-script@v6
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+
+      - name: Checkout source code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install LLVM and Clang
+        uses: KyleMayes/install-llvm-action@v1
+        with:
+          version: ${{ env.LLVM_VERSION }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: ${{ env.SCITER_RUST_VERSION }}
+          targets: x86_64-pc-windows-msvc
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: rustdesk-ci-windows
+
+      - name: Setup vcpkg with Github Actions binary cache
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgDirectory: C:\vcpkg
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+          doNotCache: false
+
+      - name: Install vcpkg dependencies
+        env:
+          VCPKG_DEFAULT_HOST_TRIPLET: x64-windows-static
+        run: |
+          & "$VCPKG_ROOT/vcpkg" install --triplet x64-windows-static --x-install-root="$VCPKG_ROOT/installed"
+
+      - name: Build
+        run: |
+          $env:RUSTFLAGS = "-C target-feature=+crt-static"
+          cargo build --release --target x86_64-pc-windows-msvc --features hwcodec
+
+  # ============================================
+  # Windows Build (GNU/MinGW)
+  # ============================================
+  build-windows-gnu:
+    name: Windows (x86_64-gnu)
+    runs-on: windows-2022
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
+          targets: x86_64-pc-windows-gnu
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: rustdesk-ci-windows-gnu
+
+      - name: Build
+        run: |
+          cargo build --release --target x86_64-pc-windows-gnu --features hwcodec
+
+  # ============================================
+  # macOS Build
+  # ============================================
+  build-macos:
+    name: macOS (x86_64 & ARM64)
+    runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-apple-darwin
+            arch: x86_64
+          - target: aarch64-apple-darwin
+            arch: arm64
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: ${{ env.MAC_RUST_VERSION }}
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: rustdesk-ci-macos-${{ matrix.arch }}
+
+      - name: Build
+        run: |
+          rustup target add ${{ matrix.target }}
+          cargo build --release --target ${{ matrix.target }} --features hwcodec
+
+  # ============================================
+  # Android Build
+  # ============================================
+  build-android:
+    name: Android (ARM64, ARMv7, x86_64)
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: aarch64
+            target: aarch64-linux-android
+            android_target: arm64-v8a
+          - arch: armv7
+            target: armv7-linux-androideabi
+            android_target: armeabi-v7a
+          - arch: x86_64
+            target: x86_64-linux-android
+            android_target: x86_64
+    steps:
+      - name: Free Disk Space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: false
+          dotnet: true
+          haskell: true
+          large-packages: false
+          docker-images: true
+          swap-storage: false
+
+      - name: Checkout source code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup NDK
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: ${{ env.NDK_VERSION }}
+          add-to-path: true
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: rustdesk-ci-android-${{ matrix.arch }}
+
+      - name: Install vcpkg dependencies
+        run: |
+          if ! ./flutter/build_android_deps.sh "${{ matrix.android_target }}"; then
+            find "$VCPKG_ROOT/" -name "*.log" | while read -r _1; do
+              echo "$_1:"
+              echo "======"
+              cat "$_1"
+              echo "======"
+              echo ""
+            done
+            exit 1
+          fi
+
+      - name: Build librustdesk
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+          ANDROID_NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: |
+          rustup target add ${{ matrix.target }}
+          cargo install cargo-ndk --version ${{ env.CARGO_NDK_VERSION }} --locked
+          cargo ndk ${{ matrix.target }} build --release --features hwcodec
+
+          mkdir -p ./flutter/android/app/src/main/jniLibs/${{ matrix.android_target }}
+          cp ./target/${{ matrix.target }}/release/liblibrustdesk.so ./flutter/android/app/src/main/jniLibs/${{ matrix.android_target }}/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@master
+        with:
+          name: librustdesk-android-${{ matrix.arch }}
+          path: ./target/${{ matrix.target }}/release/liblibrustdesk.so
+
+  # ============================================
+  # iOS Build (Library only)
+  # ============================================
+  build-ios:
+    name: iOS (ARM64)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: ${{ env.MAC_RUST_VERSION }}
+          targets: aarch64-apple-ios
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: rustdesk-ci-ios
+
+      - name: Build librustdesk
+        run: |
+          rustup target add aarch64-apple-ios
+          cargo build --features flutter,hwcodec --release --target aarch64-apple-ios --lib
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@master
+        with:
+          name: liblibrustdesk-ios
+          path: target/aarch64-apple-ios/release/liblibrustdesk.a
