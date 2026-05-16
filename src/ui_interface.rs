@@ -167,7 +167,8 @@ pub fn get_option<T: AsRef<str>>(key: T) -> String {
         if let Some(v) = map.get(key.as_ref()) {
             v.to_owned()
         } else {
-            "".to_owned()
+            // Fallback to Config::get_option which has kiska default values
+            Config::get_option(key.as_ref())
         }
     }
     #[cfg(any(target_os = "android", target_os = "ios"))]
