@@ -22,8 +22,11 @@ on:
         type: string
 
 env:
-  RUST_VERSION: "1.75"
-  MAC_RUST_VERSION: "1.81"
+  # Upstream (rustdesk 1.5.0) builds with `toolchain: stable` - see
+  # .github/workflows/ci.yml. The previous pins (1.75 / 1.81) predate the
+  # 1.5.0 dependency tree and are too old to compile it.
+  RUST_VERSION: "stable"
+  MAC_RUST_VERSION: "stable"
   CARGO_NDK_VERSION: "3.1.2"
   NDK_VERSION: "r28c"
 
@@ -39,6 +42,34 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
+
+      # Required by glib-sys / gtk-sys pulled in by the default (non-sciter)
+      # linux build. Mirrors the package list upstream uses in ci.yml.
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get -y update
+          sudo apt-get install -y \
+            clang \
+            cmake \
+            curl \
+            gcc \
+            git \
+            g++ \
+            libasound2-dev \
+            libunwind-dev \
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev \
+            libgtk-3-dev \
+            libpulse-dev \
+            libva-dev \
+            libvdpau-dev \
+            libxcb-randr0-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            libxdo-dev \
+            libxfixes-dev \
+            nasm \
+            wget
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@v1
