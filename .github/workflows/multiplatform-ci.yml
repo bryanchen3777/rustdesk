@@ -12,6 +12,14 @@ on:
     paths-ignore:
       - "docs/**"
       - "README.md"
+  # Manual trigger - used to run the Windows-only build (see build-windows job)
+  workflow_dispatch:
+    inputs:
+      features:
+        description: 'Build features'
+        required: false
+        default: ''
+        type: string
 
 env:
   RUST_VERSION: "1.75"
@@ -195,14 +203,9 @@ jobs:
   build-windows:
     name: Windows (x86_64)
     runs-on: windows-2022
-    # Manual trigger only - Windows build is complex due to vcpkg dependencies
-    workflow_dispatch:
-      inputs:
-        features:
-          description: 'Build features'
-          required: false
-          default: ''
-          type: string
+    # Manual trigger only - Windows build is complex due to vcpkg dependencies.
+    # Runs only when the workflow is dispatched manually via workflow_dispatch.
+    if: github.event_name == 'workflow_dispatch'
     steps:
       - name: Export GitHub Actions cache environment variables
         uses: actions/github-script@v6
